@@ -268,6 +268,11 @@ def validate_specs(rows, vehicle_ids):
             )
             success = False
 
+        linked_evidence_check = status in {
+            "verified",
+            "community_verified",
+        }
+
         verified_at = row["verified_at"].strip()
 
         if verified_at and not valid_date(verified_at):
