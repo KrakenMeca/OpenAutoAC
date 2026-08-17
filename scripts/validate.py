@@ -12,18 +12,25 @@ SCHEMAS = {
         "make",
         "model",
         "generation",
+        "phase",
         "variant",
+        "body",
         "engine",
         "engine_code",
+        "fuel",
         "power_kw",
         "year_from",
         "year_to",
+        "market",
+        "notes",
     ],
     "ac_specs.csv": [
         "spec_id",
         "vehicle_id",
         "refrigerant",
         "charge_nominal_g",
+        "charge_min_g",
+        "charge_max_g",
         "tolerance_plus_g",
         "tolerance_minus_g",
         "oil_type",
@@ -79,6 +86,7 @@ ALLOWED_EVIDENCE_TYPES = {
     "url",
     "none",
 }
+
 
 def error(message):
     print(f"[ERROR] {message}")
@@ -226,14 +234,74 @@ def validate_specs(rows, vehicle_ids):
             )
             success = False
 
-        charge = parse_number(row["charge_nominal_g"].strip())
+            # Refrigerant charge validation
+        nominal_raw = row["charge_nominal_g"].strip()
+        min_raw = row["charge_min_g"].strip()
+        max_raw = row["charge_max_g"].strip()
 
-        if charge is None or charge <= 0:
+        # Do not mix nominal representation with min/max range representation
+        if nominal_raw and (min_raw or max_raw):
             error(
                 f"ac_specs.csv:{line}: "
-                "charge_nominal_g must be greater than 0"
+                "use either charge_nominal_g or charge_min_g/charge_max_g, not both"
             )
             success = False
+
+        nominal = parse_number(nominal_raw) if nominal_raw else None
+        charge_min = parse_number(min_raw) if min_raw else None
+        charge_max = parse_number(max_raw) if max_raw else None
+
+        # At least a nominal charge OR a min/max range is required
+        if not nominal_raw and not min_raw and not max_raw:
+            error(
+                f"ac_specs.csv:{line}: "
+                "a refrigerant charge must be specified"
+            )
+            success = False
+
+        # Validate nominal charge when present
+        if nominal_raw:
+            if nominal is None or nominal <= 0:
+                error(
+                    f"ac_specs.csv:{line}: "
+                    "charge_nominal_g must be greater than 0"
+                )
+                success = False
+
+        # Min and max must always be provided together
+        if bool(min_raw) != bool(max_raw):
+            error(
+                f"ac_specs.csv:{line}: "
+                "charge_min_g and charge_max_g must be provided together"
+            )
+            success = False
+
+        # Validate range
+        if min_raw and max_raw:
+            if charge_min is None or charge_min <= 0:
+                error(
+                    f"ac_specs.csv:{line}: "
+                    "charge_min_g must be greater than 0"
+                )
+                success = False
+
+            if charge_max is None or charge_max <= 0:
+                error(
+                    f"ac_specs.csv:{line}: "
+                    "charge_max_g must be greater than 0"
+                )
+                success = False
+
+            if (
+                    charge_min is not None
+                    and charge_max is not None
+                    and charge_min > charge_max
+            ):
+                error(
+                    f"ac_specs.csv:{line}: "
+                    "charge_min_g cannot be greater than charge_max_g"
+                )
+                success = False
 
         for field in ("tolerance_plus_g", "tolerance_minus_g"):
             raw = row[field].strip()

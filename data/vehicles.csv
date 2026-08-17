@@ -1,1 +1,1 @@
-vehicle_id,make,model,generation,variant,engine,engine_code,power_kw,year_from,year_to
+vehicle_id,make,model,generation,phase,variant,body,engine,engine_code,fuel,power_kw,year_from,year_to,market,notes
