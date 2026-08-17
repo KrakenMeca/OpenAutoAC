@@ -1,9 +1,54 @@
 import csv
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
+
+SCHEMAS = {
+    "vehicles.csv": [
+        "vehicle_id",
+        "make",
+        "model",
+        "generation",
+        "variant",
+        "engine",
+        "engine_code",
+        "power_kw",
+        "year_from",
+        "year_to",
+    ],
+    "ac_specs.csv": [
+        "spec_id",
+        "vehicle_id",
+        "refrigerant",
+        "charge_nominal_g",
+        "tolerance_plus_g",
+        "tolerance_minus_g",
+        "oil_type",
+        "oil_quantity_ml",
+        "compressor",
+        "system_variant",
+        "status",
+        "verified_at",
+    ],
+    "sources.csv": [
+        "source_id",
+        "source_type",
+        "title",
+        "reference",
+        "license",
+        "evidence_available",
+        "contributor",
+        "verification_date",
+        "notes",
+    ],
+    "spec_sources.csv": [
+        "spec_id",
+        "source_id",
+    ],
+}
 
 ALLOWED_REFRIGERANTS = {
     "R134a",
@@ -19,176 +64,344 @@ ALLOWED_STATUSES = {
     "deprecated",
 }
 
+ALLOWED_SOURCE_TYPES = {
+    "vehicle_label",
+    "manufacturer_document",
+    "open_dataset",
+    "original_observation",
+    "other",
+}
+
+
+def error(message):
+    print(f"[ERROR] {message}")
+
 
 def load_csv(filename):
     path = DATA_DIR / filename
 
     if not path.exists():
-        print(f"[ERROR] Missing file: {path}")
-        sys.exit(1)
+        error(f"Missing file: {path}")
+        return None, False
 
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
-        return list(csv.DictReader(f))
+    with path.open("r", encoding="utf-8-sig", newline="") as file:
+        reader = csv.DictReader(file)
+
+        if reader.fieldnames != SCHEMAS[filename]:
+            error(
+                f"{filename} has an invalid schema.\n"
+                f"  Expected: {SCHEMAS[filename]}\n"
+                f"  Found:    {reader.fieldnames}"
+            )
+            return [], False
+
+        return list(reader), True
     return None
 
 
 def check_unique(rows, field, filename):
+    success = True
     seen = set()
 
-    for line_number, row in enumerate(rows, start=2):
+    for line, row in enumerate(rows, start=2):
         value = row.get(field, "").strip()
 
         if not value:
+            error(f"{filename}:{line}: '{field}' is required")
+            success = False
             continue
 
         if value in seen:
-            print(
-                f"[ERROR] Duplicate {field} '{value}' "
-                f"in {filename}, line {line_number}"
+            error(
+                f"{filename}:{line}: duplicate {field} '{value}'"
             )
-            return False
+            success = False
 
         seen.add(value)
 
-    return True
+    return success
 
 
-def is_number(value):
-    if value is None or value.strip() == "":
-        return True
-
+def parse_number(value):
     try:
-        float(value)
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def valid_date(value):
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
         return True
     except ValueError:
         return False
 
 
-def main():
-    success = True
+def validate_vehicles(rows):
+    success = check_unique(rows, "vehicle_id", "vehicles.csv")
 
-    vehicles = load_csv("vehicles.csv")
-    specs = load_csv("ac_specs.csv")
-    sources = load_csv("sources.csv")
-    spec_sources = load_csv("spec_sources.csv")
+    for line, row in enumerate(rows, start=2):
 
-    if not check_unique(vehicles, "vehicle_id", "vehicles.csv"):
-        success = False
+        if not row["make"].strip():
+            error(f"vehicles.csv:{line}: make is required")
+            success = False
 
-    if not check_unique(specs, "spec_id", "ac_specs.csv"):
-        success = False
+        if not row["model"].strip():
+            error(f"vehicles.csv:{line}: model is required")
+            success = False
 
-    if not check_unique(sources, "source_id", "sources.csv"):
-        success = False
+        year_from = row["year_from"].strip()
+        year_to = row["year_to"].strip()
 
-    vehicle_ids = {
-        row["vehicle_id"].strip()
-        for row in vehicles
-        if row.get("vehicle_id", "").strip()
-    }
+        if year_from:
+            if not year_from.isdigit():
+                error(f"vehicles.csv:{line}: invalid year_from")
+                success = False
+            elif not 1886 <= int(year_from) <= 2100:
+                error(f"vehicles.csv:{line}: unrealistic year_from")
+                success = False
 
-    spec_ids = {
-        row["spec_id"].strip()
-        for row in specs
-        if row.get("spec_id", "").strip()
-    }
+        if year_to:
+            if not year_to.isdigit():
+                error(f"vehicles.csv:{line}: invalid year_to")
+                success = False
+            elif not 1886 <= int(year_to) <= 2100:
+                error(f"vehicles.csv:{line}: unrealistic year_to")
+                success = False
 
-    source_ids = {
-        row["source_id"].strip()
-        for row in sources
-        if row.get("source_id", "").strip()
-    }
+        if year_from and year_to:
+            if year_from.isdigit() and year_to.isdigit():
+                if int(year_from) > int(year_to):
+                    error(
+                        f"vehicles.csv:{line}: "
+                        "year_from cannot be greater than year_to"
+                    )
+                    success = False
 
-    for line_number, row in enumerate(specs, start=2):
-        spec_id = row.get("spec_id", "").strip()
-        vehicle_id = row.get("vehicle_id", "").strip()
+        power = row["power_kw"].strip()
 
-        if vehicle_id and vehicle_id not in vehicle_ids:
-            print(
-                f"[ERROR] Spec '{spec_id}' references unknown "
-                f"vehicle_id '{vehicle_id}'"
+        if power:
+            value = parse_number(power)
+
+            if value is None or value <= 0:
+                error(f"vehicles.csv:{line}: invalid power_kw")
+                success = False
+
+    return success
+
+
+def validate_specs(rows, vehicle_ids):
+    success = check_unique(rows, "spec_id", "ac_specs.csv")
+
+    for line, row in enumerate(rows, start=2):
+
+        vehicle_id = row["vehicle_id"].strip()
+
+        if not vehicle_id:
+            error(f"ac_specs.csv:{line}: vehicle_id is required")
+            success = False
+        elif vehicle_id not in vehicle_ids:
+            error(
+                f"ac_specs.csv:{line}: "
+                f"unknown vehicle_id '{vehicle_id}'"
             )
             success = False
 
-        refrigerant = row.get("refrigerant", "").strip()
+        refrigerant = row["refrigerant"].strip()
 
-        if refrigerant and refrigerant not in ALLOWED_REFRIGERANTS:
-            print(
-                f"[ERROR] Unsupported refrigerant '{refrigerant}' "
-                f"in ac_specs.csv line {line_number}"
+        if not refrigerant:
+            error(f"ac_specs.csv:{line}: refrigerant is required")
+            success = False
+        elif refrigerant not in ALLOWED_REFRIGERANTS:
+            error(
+                f"ac_specs.csv:{line}: "
+                f"unsupported refrigerant '{refrigerant}'"
             )
             success = False
 
-        status = row.get("status", "").strip()
+        charge = parse_number(row["charge_nominal_g"].strip())
 
-        if status and status not in ALLOWED_STATUSES:
-            print(
-                f"[ERROR] Invalid status '{status}' "
-                f"in ac_specs.csv line {line_number}"
+        if charge is None or charge <= 0:
+            error(
+                f"ac_specs.csv:{line}: "
+                "charge_nominal_g must be greater than 0"
             )
             success = False
 
-        numeric_fields = [
-            "charge_nominal_g",
-            "tolerance_plus_g",
-            "tolerance_minus_g",
-            "oil_quantity_ml",
-        ]
+        for field in ("tolerance_plus_g", "tolerance_minus_g"):
+            raw = row[field].strip()
 
-        for field in numeric_fields:
-            if not is_number(row.get(field, "")):
-                print(
-                    f"[ERROR] '{field}' must be numeric "
-                    f"in ac_specs.csv line {line_number}"
+            if raw:
+                value = parse_number(raw)
+
+                if value is None or value < 0:
+                    error(
+                        f"ac_specs.csv:{line}: "
+                        f"{field} must be zero or greater"
+                    )
+                    success = False
+
+        oil = row["oil_quantity_ml"].strip()
+
+        if oil:
+            value = parse_number(oil)
+
+            if value is None or value < 0:
+                error(
+                    f"ac_specs.csv:{line}: "
+                    "oil_quantity_ml must be zero or greater"
                 )
                 success = False
 
-    links_seen = set()
+        status = row["status"].strip()
 
-    for line_number, row in enumerate(spec_sources, start=2):
-        spec_id = row.get("spec_id", "").strip()
-        source_id = row.get("source_id", "").strip()
+        if status not in ALLOWED_STATUSES:
+            error(
+                f"ac_specs.csv:{line}: invalid status '{status}'"
+            )
+            success = False
+
+        verified_at = row["verified_at"].strip()
+
+        if verified_at and not valid_date(verified_at):
+            error(
+                f"ac_specs.csv:{line}: "
+                "verified_at must use YYYY-MM-DD"
+            )
+            success = False
+
+    return success
+
+
+def validate_sources(rows):
+    success = check_unique(rows, "source_id", "sources.csv")
+
+    for line, row in enumerate(rows, start=2):
+
+        source_type = row["source_type"].strip()
+
+        if source_type not in ALLOWED_SOURCE_TYPES:
+            error(
+                f"sources.csv:{line}: "
+                f"invalid source_type '{source_type}'"
+            )
+            success = False
+
+        date = row["verification_date"].strip()
+
+        if date and not valid_date(date):
+            error(
+                f"sources.csv:{line}: "
+                "verification_date must use YYYY-MM-DD"
+            )
+            success = False
+
+    return success
+
+
+def validate_links(rows, spec_ids, source_ids):
+    success = True
+    links = set()
+    linked_specs = set()
+
+    for line, row in enumerate(rows, start=2):
+
+        spec_id = row["spec_id"].strip()
+        source_id = row["source_id"].strip()
 
         if spec_id not in spec_ids:
-            print(
-                f"[ERROR] spec_sources.csv line {line_number}: "
+            error(
+                f"spec_sources.csv:{line}: "
                 f"unknown spec_id '{spec_id}'"
             )
             success = False
 
         if source_id not in source_ids:
-            print(
-                f"[ERROR] spec_sources.csv line {line_number}: "
+            error(
+                f"spec_sources.csv:{line}: "
                 f"unknown source_id '{source_id}'"
             )
             success = False
 
         link = (spec_id, source_id)
 
-        if link in links_seen:
-            print(
-                f"[ERROR] Duplicate spec/source link "
-                f"'{spec_id}' -> '{source_id}'"
+        if link in links:
+            error(
+                f"spec_sources.csv:{line}: "
+                f"duplicate link {spec_id} -> {source_id}"
             )
             success = False
 
-        links_seen.add(link)
+        links.add(link)
+
+        if spec_id:
+            linked_specs.add(spec_id)
 
     for spec_id in spec_ids:
-        linked_sources = [
-            source_id
-            for linked_spec_id, source_id in links_seen
-            if linked_spec_id == spec_id
-        ]
-
-        if not linked_sources:
-            print(
-                f"[ERROR] Spec '{spec_id}' has no declared source"
-            )
+        if spec_id not in linked_specs:
+            error(f"Specification '{spec_id}' has no source")
             success = False
+
+    return success
+
+
+def main():
+    success = True
+    datasets = {}
+
+    for filename in SCHEMAS:
+        rows, valid = load_csv(filename)
+        datasets[filename] = rows or []
+
+        if not valid:
+            success = False
+
+    if not success:
+        print("OpenAutoAC validation failed.")
+        sys.exit(1)
+
+    vehicles = datasets["vehicles.csv"]
+    specs = datasets["ac_specs.csv"]
+    sources = datasets["sources.csv"]
+    links = datasets["spec_sources.csv"]
+
+    if not validate_vehicles(vehicles):
+        success = False
+
+    vehicle_ids = {
+        row["vehicle_id"].strip()
+        for row in vehicles
+        if row["vehicle_id"].strip()
+    }
+
+    if not validate_specs(specs, vehicle_ids):
+        success = False
+
+    if not validate_sources(sources):
+        success = False
+
+    spec_ids = {
+        row["spec_id"].strip()
+        for row in specs
+        if row["spec_id"].strip()
+    }
+
+    source_ids = {
+        row["source_id"].strip()
+        for row in sources
+        if row["source_id"].strip()
+    }
+
+    if not validate_links(links, spec_ids, source_ids):
+        success = False
 
     if success:
         print("OpenAutoAC validation passed.")
+        print(
+            f"{len(vehicles)} vehicles, "
+            f"{len(specs)} AC specifications, "
+            f"{len(sources)} sources."
+        )
         sys.exit(0)
 
     print("OpenAutoAC validation failed.")
