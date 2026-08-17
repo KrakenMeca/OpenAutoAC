@@ -39,7 +39,8 @@ SCHEMAS = {
         "title",
         "reference",
         "license",
-        "evidence_available",
+        "evidence_type",
+        "evidence_reference",
         "contributor",
         "verification_date",
         "notes",
@@ -72,6 +73,12 @@ ALLOWED_SOURCE_TYPES = {
     "other",
 }
 
+ALLOWED_EVIDENCE_TYPES = {
+    "photo",
+    "document",
+    "url",
+    "none",
+}
 
 def error(message):
     print(f"[ERROR] {message}")
@@ -284,6 +291,24 @@ def validate_sources(rows):
             error(
                 f"sources.csv:{line}: "
                 f"invalid source_type '{source_type}'"
+            )
+            success = False
+
+        evidence_type = row["evidence_type"].strip()
+
+        if evidence_type not in ALLOWED_EVIDENCE_TYPES:
+            error(
+                f"sources.csv:{line}: "
+                f"invalid evidence_type '{evidence_type}'"
+            )
+            success = False
+
+        evidence_reference = row["evidence_reference"].strip()
+
+        if evidence_type != "none" and not evidence_reference:
+            error(
+                f"sources.csv:{line}: "
+                "evidence_reference is required when evidence_type is not 'none'"
             )
             success = False
 
