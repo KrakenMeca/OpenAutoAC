@@ -1,1 +1,2 @@
 vehicle_id,make,model,generation,phase,variant,body,engine,engine_code,fuel,power_kw,year_from,year_to,market,notes
+VEH000001,Renault,Clio,II,,,,,,,,1998,2005,,"Production from 09/1998"
